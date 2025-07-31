@@ -13,8 +13,8 @@ import {
 } from '@mui/material'
 import { createTheme, ThemeProvider } from '@mui/material/styles'
 import { 
-    DarkMode, 
-    LightMode, 
+    Brightness4, 
+    Brightness7, 
     Settings,
     ErrorOutline,
     CheckCircleOutline,
@@ -22,10 +22,6 @@ import {
     Info,
 } from '@mui/icons-material'
 import { CssBaseline } from '@mui/material'
-
-// Brand logo paths
-const brandLogoPath = '/brandLogo.png'
-const brandLogoWhitePath = '/brandLogoWhite.png'
 
 // Import components
 import {
@@ -58,89 +54,12 @@ import {
     generateOutputFiles,
     formatTimestamp,
     readExcelFile,
-    IMPORT_COLUMNS,
+    REQUIRED_COLUMNS,
 } from './utils'
-
-import {
-    sortByTotalMarks,
-} from './utils/processingUtils'
 
 // Import types and constants
 import { DialogDecision } from './types'
 import { UI_TEXT } from './constants'
-
-// Helper function to create raw data with processing columns
-const createRawDataWithProcessingColumns = (filteredData: any[], assignedBooklets: any[], topCategory: number, middleCategory: number, firstCycleName: string) => {
-    const rawDataWithAllColumns: any[] = []
-    
-    // Create a map of assigned booklets for quick lookup using the same key generation logic
-    const assignedBookletsMap = new Map<string, any>()
-    assignedBooklets.forEach(booklet => {
-        // Use a more robust key that works with available columns
-        const key = `${booklet['Evaluated By']}_${booklet['Script Id']}_${booklet['Evaluator Id']}`
-        assignedBookletsMap.set(key, booklet)
-    })
-    
-            // Filter to only include primary cycle records for processing
-        const primaryCycleData = filteredData.filter(record => record['Cycle'] === firstCycleName)
-    
-    // Group primary cycle data by evaluator for categorization
-    const evaluatorGroups = new Map<string, any[]>()
-    primaryCycleData.forEach(record => {
-        const evaluator = record['Evaluated By']
-        if (!evaluatorGroups.has(evaluator)) {
-            evaluatorGroups.set(evaluator, [])
-        }
-        evaluatorGroups.get(evaluator)!.push(record)
-    })
-    
-    // Process each evaluator's records (only primary cycle records)
-    evaluatorGroups.forEach((evaluatorRecords) => {
-        const sortedRecords = sortByTotalMarks(evaluatorRecords)
-        const totalBooklets = sortedRecords.length
-        const topCount = Math.ceil((topCategory / 100) * totalBooklets)
-        const middleCount = Math.ceil((middleCategory / 100) * totalBooklets)
-        
-        sortedRecords.forEach((record: any, index: number) => {
-            let category = ''
-            if (index < topCount) {
-                category = 'Top'
-            } else if (index < topCount + middleCount) {
-                category = 'Middle'
-            } else {
-                category = 'Bottom'
-            }
-            
-            // Check if this record was selected for moderation using the same key generation logic
-            const key = `${record['Evaluated By']}_${record['Script Id']}_${record['Evaluator Id']}`
-            const assignedBooklet = assignedBookletsMap.get(key)
-            
-            const rawRecord = {
-                ...record,
-                Category: category,
-                'Selected for Moderation': assignedBooklet ? 'Selected' : 'Not Selected',
-                'Moderated By': assignedBooklet ? assignedBooklet['Moderated By'] : ''
-            }
-            
-            rawDataWithAllColumns.push(rawRecord)
-        })
-    })
-    
-    // Add non-primary cycle records (Cycle = '-') without categorization
-    filteredData.forEach(record => {
-        if (record['Cycle'] !== firstCycleName) {
-            const rawRecord = {
-                ...record,
-                Category: 'N/A',
-                'Selected for Moderation': 'Not Selected',
-                'Moderated By': ''
-            }
-            rawDataWithAllColumns.push(rawRecord)
-        }
-    })
-    
-    return rawDataWithAllColumns
-}
 
 function App() {
     // Use custom hooks
@@ -186,9 +105,6 @@ function App() {
     
     // Store actual file objects for processing
     const [fileObjects, setFileObjects] = useState<File[]>([])
-    
-    // Store file paths for saving to same location
-    const [filePathsMap, setFilePathsMap] = useState<Map<string, string>>(new Map())
 
     // Single evaluator dialog state
     const [singleEvaluatorDialog, setSingleEvaluatorDialog] = useState<{
@@ -266,106 +182,37 @@ function App() {
     }
 
         const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        try {
-            // Check if we're in Tauri context
-            if (typeof window !== 'undefined' && (window as any).__TAURI__) {
-                // Use Tauri file dialog to select files
-                let selected: any = null
-                try {
-                    // Use dynamic import with a function to avoid static analysis
-                    const importModule = (path: string) => import(path)
-                    const tauriDialog = await importModule('@tauri-apps/api/dialog')
-                    selected = await tauriDialog.open({
-                        multiple: true,
-                        filters: [{
-                            name: 'Excel Files',
-                            extensions: ['xlsx', 'xls']
-                        }],
-                        title: 'Select Excel Files'
+        const files = event.target.files
+        if (files && files.length > 0) {
+            // Validate each file asynchronously
+            const validations = await Promise.all(Array.from(files).map(file => validateInputFile(file)))
+            const newValidFiles: string[] = []
+            const newValidFileObjects: File[] = []
+            const invalidFiles: Array<{ name: string; missingColumns: string[] }> = []
+            
+            validations.forEach((validation, idx) => {
+                const file = files[idx]
+                if (validation.valid) {
+                    newValidFiles.push(file.name)
+                    newValidFileObjects.push(file)
+                } else {
+                    invalidFiles.push({
+                        name: file.name,
+                        missingColumns: validation.missingColumns
                     })
-                } catch (importError) {
-                    console.warn('Tauri dialog not available, falling back to browser input:', importError)
-                    // Fall through to browser file input
                 }
-                
-                if (selected && Array.isArray(selected)) {
-                    const filePaths = selected as string[]
-                    const newValidFiles: string[] = []
-                    const newValidFileObjects: File[] = []
-                    const newFilePathsMap = new Map<string, string>()
-                    const invalidFiles: Array<{ name: string; missingColumns: string[] }> = []
-                    
-                    for (const filePath of filePaths) {
-                        try {
-                            const fileName = filePath.split(/[/\\]/).pop() || 'unknown'
-                            
-                            // For now, we'll store the file path and create a placeholder file object
-                            // The actual file reading will be done during processing
-                            const placeholderFile = new File([], fileName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-                            
-                            // We'll validate during processing, for now just add the file
-                            newValidFiles.push(fileName)
-                            newValidFileObjects.push(placeholderFile)
-                            newFilePathsMap.set(fileName, filePath)
-                            
-                        } catch (error) {
-                            console.error('Error processing file:', filePath, error)
-                            const fileName = filePath.split(/[/\\]/).pop() || 'unknown'
-                            invalidFiles.push({
-                                name: fileName,
-                                missingColumns: ['File read error']
-                            })
-                        }
-                    }
-                    
-                    // Only add valid files to the selection
-                    setSelectedFiles(newValidFiles)
-                    setValidFiles(newValidFiles)
-                    setFileObjects(newValidFileObjects)
-                    setFilePathsMap(newFilePathsMap)
-                    
-                    if (invalidFiles.length > 0) {
-                        showError(`<b>${invalidFiles.length} files with invalid columns were rejected.</b><br/><br/>Ensure the selected files are downloaded from the result page using<br/> 'Download Evaluation Stats' button and not modified manually.`)
-                    }
-                }
-            } else {
-                // Fallback to browser file input
-                const files = event.target.files
-                if (files && files.length > 0) {
-                    const validations = await Promise.all(Array.from(files).map(file => validateInputFile(file)))
-                    const newValidFiles: string[] = []
-                    const newValidFileObjects: File[] = []
-                    const newFilePathsMap = new Map<string, string>()
-                    const invalidFiles: Array<{ name: string; missingColumns: string[] }> = []
-                    
-                    validations.forEach((validation, idx) => {
-                        const file = files[idx]
-                        if (validation.valid) {
-                            newValidFiles.push(file.name)
-                            newValidFileObjects.push(file)
-                        } else {
-                            invalidFiles.push({
-                                name: file.name,
-                                missingColumns: validation.missingColumns
-                            })
-                        }
-                    })
-                    
-                    setSelectedFiles(newValidFiles)
-                    setValidFiles(newValidFiles)
-                    setFileObjects(newValidFileObjects)
-                    setFilePathsMap(newFilePathsMap)
-                    
-                    if (invalidFiles.length > 0) {
-                        showError(`<b>${invalidFiles.length} files with invalid columns were rejected.</b><br/><br/>Ensure the selected files are downloaded from the result page using<br/> 'Download Evaluation Stats' button and not modified manually.`)
-                    }
-                }
+            })
+            
+            // Only add valid files to the selection
+            setSelectedFiles(newValidFiles)
+            setValidFiles(newValidFiles)
+            setFileObjects(newValidFileObjects)
+            
+            if (invalidFiles.length > 0) {
+                // Show simplified error message for invalid files
+                showError(`<b>${invalidFiles.length} files with invalid columns were rejected.</b><br/><br/>Ensure the selected files are downloaded from the result page using<br/> 'Download Evaluation Stats' button and not modified manually.`)
             }
-        } catch (error) {
-            console.error('Error opening file dialog:', error)
-            showError('Error opening file dialog. Please try again.')
         }
-        
         // Reset the input value so the same file can be selected again
         event.target.value = ''
     }
@@ -374,11 +221,6 @@ function App() {
         setSelectedFiles(prev => prev.filter(f => f !== fileName))
         setValidFiles(prev => prev.filter(f => f !== fileName))
         setFileObjects(prev => prev.filter(f => f.name !== fileName))
-        setFilePathsMap(prev => {
-            const newMap = new Map(prev)
-            newMap.delete(fileName)
-            return newMap
-        })
     }
 
     const handleGenerateScheduleChange = (checked: boolean) => {
@@ -457,7 +299,6 @@ function App() {
             const processedDataByFileMap = new Map<string, any[]>()
             const fileDataByFileMap = new Map<string, any[]>()
             const categorizedDataByFileMap = new Map<string, any[]>()
-            const rawDataByFileMap = new Map<string, any[]>()
             
             for (const fileName of validFiles) {
                 let fileContainerId: string | undefined
@@ -471,18 +312,11 @@ function App() {
                         continue
                     }
                     
-                    const filePath = filePathsMap.get(fileName)
-                    const jsonData = await readExcelFile(file, filePath)
-                    
-                    // Filter to only include the specified columns immediately after reading
-                    const filteredData = filterToRequiredColumns(jsonData, IMPORT_COLUMNS)
-                    
-                    // Store filtered data for output generation (will be updated after categorization)
-                    rawDataByFileMap.set(fileName, filteredData)
+                    const jsonData = await readExcelFile(file)
                     
                     // Validate cycle column values
-                    const cycleValues = [...new Set(filteredData.map(row => row['Cycle']).filter(Boolean))]
-                    const invalidCycles = cycleValues.filter(cycle => cycle !== userPreferences.firstCycleName && cycle !== '-')
+                    const cycleValues = [...new Set(jsonData.map(row => row['Cycle']).filter(Boolean))]
+                    const invalidCycles = cycleValues.filter(cycle => cycle !== 'primary' && cycle !== '-')
                     
                     if (invalidCycles.length > 0) {
                         addCycleValidation(false, invalidCycles)
@@ -493,18 +327,21 @@ function App() {
                     addCycleValidation(true)
                     addLogLineToContainer(`Validation passed: Only required cycles found`, fileContainerId)
                     
-                                    // Filter data to only include Cycle = 'primary'
-                const primaryData = filterPrimaryCycleRecords(filteredData, userPreferences.firstCycleName)
-                    const absentRecords = filteredData.length - primaryData.length
+                    // Filter data to only include Cycle = 'primary'
+                    const primaryData = filterPrimaryCycleRecords(jsonData)
+                    const absentRecords = jsonData.length - primaryData.length
                     
-                    // Store primary data for this file (already filtered to required columns)
-                    fileDataByFileMap.set(fileName, primaryData)
+                    // Filter to only include required columns
+                    const filteredData = filterToRequiredColumns(primaryData, REQUIRED_COLUMNS)
                     
-                    // Group booklets by evaluator first (use primary data which is already filtered)
-                    const evaluatorGroups = groupByEvaluator(primaryData)
+                    // Store filtered data for this file
+                    fileDataByFileMap.set(fileName, filteredData)
+                    
+                    // Group booklets by evaluator first
+                    const evaluatorGroups = groupByEvaluator(filteredData)
                     
                     // Combined data loading and evaluator log
-                    const dataLog = `Data Loaded: ${filteredData.length} Rows  |  ${primaryData.length} Present  |  ${absentRecords} Absent  |  ${evaluatorGroups.size} Evaluators`
+                    const dataLog = `Data Loaded: ${jsonData.length} Rows  |  ${primaryData.length} Present  |  ${absentRecords} Absent  |  ${evaluatorGroups.size} Evaluators`
                     addLogLineToContainer(dataLog, fileContainerId)
                     
                     const fileSelectedForModeration: any[] = []
@@ -513,7 +350,7 @@ function App() {
                     // Store evaluator information for later moderator assignment
                     const evaluatorInfo = new Map<string, { evaluatorName: string, selected: any[], evaluatorBooklets: any[], categorized: any[] }>()
                     
-                    // Process each evaluator's booklets (use primaryData structure)
+                    // Process each evaluator's booklets
                     evaluatorGroups.forEach((evaluatorBooklets, evaluatorName) => {
                         const { categorized, selected } = processEvaluatorBooklets(
                             evaluatorBooklets,
@@ -579,22 +416,17 @@ function App() {
                                 const selectedMiddle = selected.filter(r => r.Category === 'Middle').length
                                 const selectedBottom = selected.filter(r => r.Category === 'Bottom').length
                                 
-                                                            // Create evaluator log with same evaluator as moderator
-                            const evaluatorLog = `Evaluator: ${evaluatorName}\n  • Picked ${selectedTop} from ${topRecords} booklets from top\n  • Picked ${selectedMiddle} from ${middleRecords} booklets in the middle\n  • Picked ${selectedBottom} from ${bottomRecords} booklets at the bottom\n  • Total: ${selected.length} picked from ${evaluatorBooklets.length} booklets\n  • Assigned Moderator: ${evaluatorList[0]}`
+                                // Create evaluator log with same evaluator as moderator
+                                const evaluatorLog = `Evaluator: ${evaluatorName}\n  • Picked ${selectedTop} from ${topRecords} booklets from top\n  • Picked ${selectedMiddle} from ${middleRecords} booklets in the middle\n  • Picked ${selectedBottom} from ${bottomRecords} booklets at the bottom\n  • Total: ${selected.length} picked from ${evaluatorBooklets.length} booklets\n  • Assigned Moderator: ${evaluatorList[0]}`
+                                
+                                addLogLineToContainer(evaluatorLog, fileContainerId)
+                            })
                             
-                            addLogLineToContainer(evaluatorLog, fileContainerId)
-                        })
-                        
 
-                        allSelectedForModeration.push(...assignedBooklets)
-                        processedDataByFileMap.set(fileName, assignedBooklets)
-                        categorizedDataByFileMap.set(fileName, fileCategorizedData)
-                        
-                        // Create raw data with filtered columns plus processing columns
-                        const fileRawDataWithAllColumns = createRawDataWithProcessingColumns(filteredData, assignedBooklets, topCategory, middleCategory, userPreferences.firstCycleName)
-                        rawDataByFileMap.set(fileName, fileRawDataWithAllColumns)
-                        
-                        dialogHandledAssignment = true
+                            allSelectedForModeration.push(...assignedBooklets)
+                            processedDataByFileMap.set(fileName, assignedBooklets)
+                            categorizedDataByFileMap.set(fileName, fileCategorizedData)
+                            dialogHandledAssignment = true
                         } else if (decision.action === 'different' && decision.alternateModerator) {
                             addLogLineToContainer(`User chose: Assign different moderator`, fileContainerId)
                             addLogLineToContainer(`Alternate moderator entered: ${decision.alternateModerator}`, fileContainerId)
@@ -613,22 +445,17 @@ function App() {
                                 const selectedMiddle = selected.filter(r => r.Category === 'Middle').length
                                 const selectedBottom = selected.filter(r => r.Category === 'Bottom').length
                                 
-                                                            // Create evaluator log with alternate moderator
-                            const evaluatorLog = `Evaluator: ${evaluatorName}\n  • Picked ${selectedTop} from ${topRecords} booklets from top\n  • Picked ${selectedMiddle} from ${middleRecords} booklets in the middle\n  • Picked ${selectedBottom} from ${bottomRecords} booklets at the bottom\n  • Total Picked: ${selected.length} from ${evaluatorBooklets.length} booklets\n  • Moderator Selected: ${decision.alternateModerator}`
+                                // Create evaluator log with alternate moderator
+                                const evaluatorLog = `Evaluator: ${evaluatorName}\n  • Picked ${selectedTop} from ${topRecords} booklets from top\n  • Picked ${selectedMiddle} from ${middleRecords} booklets in the middle\n  • Picked ${selectedBottom} from ${bottomRecords} booklets at the bottom\n  • Total Picked: ${selected.length} from ${evaluatorBooklets.length} booklets\n  • Moderator Selected: ${decision.alternateModerator}`
+                                
+                                addLogLineToContainer(evaluatorLog, fileContainerId)
+                            })
                             
-                            addLogLineToContainer(evaluatorLog, fileContainerId)
-                        })
-                        
 
-                        allSelectedForModeration.push(...assignedBooklets)
-                        processedDataByFileMap.set(fileName, assignedBooklets)
-                        categorizedDataByFileMap.set(fileName, fileCategorizedData)
-                        
-                        // Create raw data with filtered columns plus processing columns
-                        const fileRawDataWithAllColumns = createRawDataWithProcessingColumns(filteredData, assignedBooklets, topCategory, middleCategory, userPreferences.firstCycleName)
-                        rawDataByFileMap.set(fileName, fileRawDataWithAllColumns)
-                        
-                        dialogHandledAssignment = true
+                            allSelectedForModeration.push(...assignedBooklets)
+                            processedDataByFileMap.set(fileName, assignedBooklets)
+                            categorizedDataByFileMap.set(fileName, fileCategorizedData)
+                            dialogHandledAssignment = true
                         } else if (decision.action === 'cancel') {
                             addLogLineToContainer(`❌ User chose: Cancel processing`, fileContainerId)
                             fileCancelled = true
@@ -644,7 +471,7 @@ function App() {
                     // Only proceed if file was not cancelled
                     if (!fileCancelled) {
                         // Add allocation successful message only if not cancelled
-                        addLogLineToContainer(`Allocation Successful: ${fileSelectedForModeration.length} out of ${filteredData.length} booklets`, fileContainerId)
+                        addLogLineToContainer(`Allocation Successful: ${fileSelectedForModeration.length} out of ${primaryData.length} booklets`, fileContainerId)
                         
                         // Skip automatic assignment if dialog already handled it
                         if (!dialogHandledAssignment) {
@@ -682,10 +509,6 @@ function App() {
                         allSelectedForModeration.push(...assignedBooklets)
                         processedDataByFileMap.set(fileName, assignedBooklets)
                         categorizedDataByFileMap.set(fileName, fileCategorizedData)
-                        
-                        // Create raw data with filtered columns plus processing columns
-                        const fileRawDataWithAllColumns = createRawDataWithProcessingColumns(filteredData, assignedBooklets, topCategory, middleCategory, userPreferences.firstCycleName)
-                        rawDataByFileMap.set(fileName, fileRawDataWithAllColumns)
                     }
                 }
                     
@@ -702,14 +525,13 @@ function App() {
                 fileObjectsMap.set(file.name, file)
             })
             
-            const outputResult = await generateOutputFiles(
+            const outputResult = generateOutputFiles(
                 generateSchedule,
                 generateBulk,
                 processedDataByFileMap,
-                rawDataByFileMap,
+                categorizedDataByFileMap,
                 allSelectedForModeration,
                 fileObjectsMap,
-                filePathsMap,
                 userPreferences.saveToSameLocation
             )
             
@@ -734,14 +556,7 @@ function App() {
             }
             
             // Show success message
-            const message = generateSchedule && generateBulk 
-                ? `Processing completed! Generated ${outputResult.individualFiles.count} individual file(s) and 1 bulk file.`
-                : generateSchedule 
-                ? `Processing completed! Generated ${outputResult.individualFiles.count} individual file(s).`
-                : generateBulk 
-                ? `Processing completed! Generated 1 bulk file.`
-                : `Processing completed!`
-            showSuccess(message)
+            showSuccess(`Processing completed! Generated ${outputResult.totalFiles} file(s).`)
         }
         
         // Start the processing
@@ -769,7 +584,6 @@ function App() {
         setEnableDistribution(false)
         setSelectedFiles([])
         setFileObjects([])
-        setFilePathsMap(new Map())
         setProcessError(null)
         clearLogs()
     }
@@ -816,20 +630,6 @@ function App() {
                             {UI_TEXT.APP_TITLE}
                         </Typography>
                         <IconButton
-                            onClick={toggleColorMode}
-                            sx={{
-                                mr: 2,
-                                color: theme.palette.text.secondary,
-                                '&:hover': {
-                                    color: theme.palette.primary.main,
-                                    transform: 'scale(1.1)',
-                                    transition: 'all 0.2s ease-in-out'
-                                }
-                            }}
-                        >
-                            {mode === 'dark' ? <LightMode /> : <DarkMode />}
-                        </IconButton>
-                        <IconButton
                             onClick={() => setPreferencesOpen(true)}
                             sx={{ 
                                 mr: 2,
@@ -843,16 +643,19 @@ function App() {
                         >
                             <Settings />
                         </IconButton>
-                        <Box
-                            component="img"
-                            src={theme.palette.mode === 'dark' ? brandLogoWhitePath : brandLogoPath}
-                            alt="Brand Logo"
+                        <IconButton
+                            onClick={toggleColorMode}
                             sx={{
-                                height: 40,
-                                width: 'auto',
-                                objectFit: 'contain'
+                                color: theme.palette.text.secondary,
+                                '&:hover': {
+                                    color: theme.palette.primary.main,
+                                    transform: 'scale(1.1)',
+                                    transition: 'all 0.2s ease-in-out'
+                                }
                             }}
-                        />
+                        >
+                            {mode === 'dark' ? <Brightness7 /> : <Brightness4 />}
+                        </IconButton>
                     </Toolbar>
                 </AppBar>
 
@@ -861,7 +664,9 @@ function App() {
                     py: 2, 
                     px: { xs: 1, md: 2 },
                     display: 'flex',
-                    flexDirection: 'column'
+                    flexDirection: 'column',
+                    width: '60%',
+                    mx: 'auto'
                 }}>
                     <Grid container spacing={2} justifyContent="center">
                         {/* Left Panel - Controls */}
