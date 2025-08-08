@@ -198,4 +198,71 @@ File Upload → Validation → Processing → Categorization → Selection → M
 - Efficient data processing
 - Optimized re-renders
 - Lazy loading where appropriate
-- Memory management for large files 
+- Memory management for large files
+
+---
+
+## Updated Comprehensive Index (v1.0.0)
+
+### Overview
+- Version: frontend `1.0.0` (package.json), desktop `1.0.0` (src-tauri/tauri.conf.json)
+- Stack: React 18 + TypeScript + Vite + MUI + SheetJS; Tauri for desktop (Rust)
+- Goal: Import Excel → process (categorize, select, assign) → export Excel with Allocation Data (Sheet 1) and Master Data (Sheet 2)
+
+### Primary Modules
+- `src/App.tsx`: Orchestrates the full flow, preferences, logs, dialogs, and output generation.
+- `src/utils/processingUtils.ts`:
+  - `filterToRequiredColumns(data, IMPORT_COLUMNS)` ensures all downstream logic uses the same 11 columns.
+  - `filterPrimaryCycleRecords(data, cycleName)` uses user-defined First Cycle Name.
+  - `sortByTotalMarks`, `categorizeRecords` (ceil), `selectRecordsFromCategories` (ceil).
+  - `assignModerators` guarantees one moderator per evaluator; prevents self-moderation; handles insufficient moderators.
+  - `createRecordKey(record)` single source of truth: `${Evaluated By}_${Script Id}_${Evaluator Id}`.
+- `src/utils/fileUtils.ts`:
+  - Columns: `REQUIRED_COLUMNS` (validation) and `IMPORT_COLUMNS` (strict 11 imported columns).
+  - Excel read/write: browser and Tauri-native saving; Sheet names are `Allocation Data` and `Master Data`.
+  - `readExcelFile` supports Tauri fs or FileReader.
+- `src/utils/outputUtils.ts`:
+  - `createFirstSheetData(raw)` builds Allocation Data from Master Data (selected rows; column renames: Test Id, User Id, Evaluator Ids).
+  - `generateIndividualFiles` and `generateBulkFile`; `generateOutputFiles` orchestrates based on preferences.
+- `src/components/*`:
+  - `FileUpload`: input selection (Tauri dialog fallback).
+  - `ProcessingConfig` / `OutputConfig`: distribution, picking, and output toggles.
+  - `ProcessingLogs`: file-wise containers; dark blue header; chip shows picked/present (%).
+  - `UserPreferences`: includes First Cycle Name (default `primary`), theme, output options, etc.
+- `src/hooks/*`:
+  - `useUserPreferences`: persists preferences (including `firstCycleName`) to localStorage.
+  - `useProcessingLogs`: file containers, cycle validation, summary logs.
+  - `useSnackbar`: HTML-capable snackbars.
+
+### Processing Pipeline (per file)
+1. Read Excel → JSON rows.
+2. Filter to `IMPORT_COLUMNS` immediately.
+3. Validate cycles; compute Present vs Absent; use `firstCycleName`.
+4. Group by evaluator → sort by marks desc → categorize (ceil) → pick (ceil).
+5. Assign moderators (one-to-one; no self-moderation).
+6. Build Master Data = filtered input + `Category`, `Selected for Moderation`, `Moderated By`.
+7. Build Allocation Data = selected-only projection with renamed columns.
+8. Save individual files and/or bulk file (combined Master Data), per preferences.
+
+### Data Contracts
+- Imported (strict 11): Register Number, Name of the student, Schedule Id, Schedule Name, Email of the student, Total Marks, Exam Appearance Status, Evaluated By, Evaluator Id, Script Id, Cycle.
+- Master Data adds: Category, Selected for Moderation, Moderated By.
+- Allocation Data (Sheet 1): Selected only; columns: Test Id, User Id, Evaluator Ids, Category, Selected for Moderation.
+
+### Build and Distribution
+- Web build: `npm run build` → `dist/`.
+- Desktop dev: `npm run tauri:dev`.
+- Desktop build: `npm run tauri:build` → bundles in `src-tauri/target/release/bundle/` (Windows MSI/NSIS present).
+
+### Noted Risks / Follow-ups
+- Duplicate file-naming patterns: `constants/index.ts` vs `utils/outputUtils.ts`. Consider centralizing to avoid drift.
+- `generateIndividualFiles` is synchronous while using async saves with `.then(...)`; if precise counts are required at call site, consider making it `async` and `await` saves for determinism (bulk path already async/await).
+- Ensure all consumers use `createRecordKey` from `processingUtils`.
+
+### Quick Links
+- Entry/UI: `src/App.tsx`, `src/main.tsx`
+- Processing: `src/utils/processingUtils.ts`
+- Excel I/O: `src/utils/fileUtils.ts`
+- Output generation: `src/utils/outputUtils.ts`
+- Preferences: `src/hooks/useUserPreferences.ts`, `src/components/UserPreferences/UserPreferences.tsx`
+- Logs UI: `src/components/ProcessingLogs/ProcessingLogs.tsx`

@@ -63,6 +63,7 @@ import {
 
 import {
     sortByTotalMarks,
+    createRecordKey,
 } from './utils/processingUtils'
 
 // Import types and constants
@@ -76,8 +77,7 @@ const createRawDataWithProcessingColumns = (filteredData: any[], assignedBooklet
     // Create a map of assigned booklets for quick lookup using the same key generation logic
     const assignedBookletsMap = new Map<string, any>()
     assignedBooklets.forEach(booklet => {
-        // Use a more robust key that works with available columns
-        const key = `${booklet['Evaluated By']}_${booklet['Script Id']}_${booklet['Evaluator Id']}`
+        const key = createRecordKey(booklet)
         assignedBookletsMap.set(key, booklet)
     })
     
@@ -112,8 +112,7 @@ const createRawDataWithProcessingColumns = (filteredData: any[], assignedBooklet
             }
             
             // Check if this record was selected for moderation using the same key generation logic
-            const key = `${record['Evaluated By']}_${record['Script Id']}_${record['Evaluator Id']}`
-            const assignedBooklet = assignedBookletsMap.get(key)
+            const assignedBooklet = assignedBookletsMap.get(createRecordKey(record))
             
             const rawRecord = {
                 ...record,
@@ -454,6 +453,7 @@ function App() {
         // Step 1: Data Loading & Validation
         const processFiles = async () => {
             const allSelectedForModeration: any[] = []
+            let skippedFilesDueToCycles = 0
             const processedDataByFileMap = new Map<string, any[]>()
             const fileDataByFileMap = new Map<string, any[]>()
             const categorizedDataByFileMap = new Map<string, any[]>()
@@ -487,6 +487,7 @@ function App() {
                     if (invalidCycles.length > 0) {
                         addCycleValidation(false, invalidCycles)
                         addLogLineToContainer(`Skipped processing this file because of unusual cycles found: ${invalidCycles.join(', ')}`, fileContainerId)
+                        skippedFilesDueToCycles += 1
                         continue
                     }
                     
@@ -734,13 +735,16 @@ function App() {
             }
             
             // Show success message
+            const skippedSuffix = skippedFilesDueToCycles > 0 
+                ? ` Skipped ${skippedFilesDueToCycles} file(s) due to unusual cycles.` 
+                : ''
             const message = generateSchedule && generateBulk 
-                ? `Processing completed! Generated ${outputResult.individualFiles.count} individual file(s) and 1 bulk file.`
+                ? `Processing completed! Generated ${outputResult.individualFiles.count} individual file(s) and 1 bulk file.` + skippedSuffix
                 : generateSchedule 
-                ? `Processing completed! Generated ${outputResult.individualFiles.count} individual file(s).`
+                ? `Processing completed! Generated ${outputResult.individualFiles.count} individual file(s).` + skippedSuffix
                 : generateBulk 
-                ? `Processing completed! Generated 1 bulk file.`
-                : `Processing completed!`
+                ? `Processing completed! Generated 1 bulk file.` + skippedSuffix
+                : `Processing completed!` + skippedSuffix
             showSuccess(message)
         }
         

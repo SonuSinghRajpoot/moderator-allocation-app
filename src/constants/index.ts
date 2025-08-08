@@ -42,8 +42,8 @@ export const PROCESSING_MESSAGES = {
 
 // File naming patterns
 export const FILE_PATTERNS = {
-    PROCESSED_PREFIX: 'processed_',
-    BULK_PREFIX: 'bulk_allocation_data_',
+    PROCESSED_PREFIX: 'Processed_',
+    BULK_PREFIX: 'Bulk_Allocation_',
     FILE_EXTENSION: '.xlsx',
 } as const
 

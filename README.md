@@ -10,6 +10,46 @@ A desktop application built with React, TypeScript, and Tauri for processing eva
 - Modern UI with Material-UI components
 - Cross-platform support (Windows, Linux, macOS)
 
+## Output format & naming
+
+- File naming patterns
+  - Individual files: `Processed_<OriginalFileName>.xlsx`
+  - Bulk file: `Bulk_Allocation_<DD-MM-YYYY_HH-MM-SS>.xlsx`
+  - When "Save output files in same location as input files" is enabled (recommended), files are saved next to the input; otherwise, a browser download is triggered.
+
+- Sheets and contents
+  - Sheet 1: `Allocation Data`
+    - Includes only rows where `Selected for Moderation = 'Selected'`
+    - Columns are renamed and ordered as:
+      - `Test Id` (from `Schedule Id`)
+      - `User Id` (from `Email of the student`)
+      - `Evaluator Ids` (from `Moderated By`)
+      - `Category`
+      - `Selected for Moderation`
+  - Sheet 2: `Master Data`
+    - Full processed dataset (imported columns only), plus processing columns:
+      - `Category`
+      - `Selected for Moderation`
+      - `Moderated By`
+
+- Imported columns (strict)
+  - Only the following 11 columns are imported from input files and used throughout processing and outputs:
+    1. Register Number
+    2. Name of the student
+    3. Schedule Id
+    4. Schedule Name
+    5. Email of the student
+    6. Total Marks
+    7. Exam Appearance Status
+    8. Evaluated By
+    9. Evaluator Id
+    10. Script Id
+    11. Cycle
+
+Notes
+- The primary cycle used for processing is configurable in User Preferences (default: `primary`).
+- Percentage-based categorization and selection are rounded up using `Math.ceil()`.
+
 ## Prerequisites
 
 ### For Development

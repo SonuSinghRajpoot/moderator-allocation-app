@@ -4,13 +4,9 @@ import {
     formatTimestampForFilename 
 } from './fileUtils'
 import { createRecordKey } from './processingUtils'
+import { FILE_PATTERNS } from '../constants'
 
-// File patterns for naming
-const FILE_PATTERNS = {
-    PROCESSED_PREFIX: 'Processed_',
-    BULK_PREFIX: 'Bulk_Allocation_',
-    FILE_EXTENSION: '.xlsx'
-}
+// File patterns centralized in constants
 
 // Create first sheet data from raw data
 const createFirstSheetData = (rawData: any[]): any[] => {
@@ -26,62 +22,46 @@ const createFirstSheetData = (rawData: any[]): any[] => {
 }
 
 // Generate individual processed files
-export const generateIndividualFiles = (
+export const generateIndividualFiles = async (
     processedDataByFileMap: Map<string, any[]>,
     rawDataByFileMap: Map<string, any[]>,
     filePathsMap: Map<string, string>,
     saveToSameLocation: boolean = true
-): { count: number; files: string[] } => {
-    let individualFilesCount = 0
-    const generatedFiles: string[] = []
-    
+): Promise<{ count: number; files: string[] }> => {
+    const savePromises: Array<Promise<string>> = []
+
     processedDataByFileMap.forEach((processedData, fileName) => {
         if (processedData.length > 0) {
-            // Create a map of selected records for this file
-            const selectedRecordsMap = new Map()
-            processedData.forEach(record => {
-                const recordKey = createRecordKey(record)
-                selectedRecordsMap.set(recordKey, record['Moderated By'] || '')
-            })
-            
             // Get raw data for this file
             const rawData = rawDataByFileMap.get(fileName) || []
-            
+
             // Create first sheet data (filtered and renamed)
             const firstSheetData = createFirstSheetData(rawData)
-            
+
             const baseName = fileName.replace(/\.xlsx$/i, '')
             const processedFileName = `${FILE_PATTERNS.PROCESSED_PREFIX}${baseName}${FILE_PATTERNS.FILE_EXTENSION}`
-            
+
             // Save file to same location if requested and path is available
             if (saveToSameLocation && filePathsMap.has(fileName)) {
                 const inputFilePath = filePathsMap.get(fileName)!
-                saveExcelFileWithSheetsToSameLocation(firstSheetData, rawData, processedFileName, inputFilePath)
-                    .then(savedPath => {
-                        generatedFiles.push(savedPath)
-                        individualFilesCount++
-                    })
+                const p = saveExcelFileWithSheetsToSameLocation(firstSheetData, rawData, processedFileName, inputFilePath)
                     .catch(error => {
                         console.error('Error saving file to same location:', error)
                         // Fallback to regular save
-                        saveExcelFileWithSheets(firstSheetData, rawData, processedFileName)
-                            .then(savedPath => {
-                                generatedFiles.push(savedPath)
-                                individualFilesCount++
-                            })
+                        return saveExcelFileWithSheets(firstSheetData, rawData, processedFileName)
                     })
+                savePromises.push(p)
             } else {
                 // Regular save
-                saveExcelFileWithSheets(firstSheetData, rawData, processedFileName)
-                    .then(savedPath => {
-                        generatedFiles.push(savedPath)
-                        individualFilesCount++
-                    })
+                savePromises.push(
+                    saveExcelFileWithSheets(firstSheetData, rawData, processedFileName)
+                )
             }
         }
     })
-    
-    return { count: individualFilesCount, files: generatedFiles }
+
+    const savedPaths = await Promise.all(savePromises)
+    return { count: savedPaths.length, files: savedPaths }
 }
 
 // Generate bulk allocation file
@@ -149,7 +129,7 @@ export const generateOutputFiles = async (
     let bulkFile: string | undefined
     
     if (generateSchedule) {
-        individualFiles = generateIndividualFiles(processedDataByFileMap, rawDataByFileMap, filePathsMap, saveToSameLocation)
+        individualFiles = await generateIndividualFiles(processedDataByFileMap, rawDataByFileMap, filePathsMap, saveToSameLocation)
     }
     
     if (generateBulk) {
