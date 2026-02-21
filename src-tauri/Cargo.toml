@@ -1,6 +1,6 @@
 [package]
 name = "moderator-app"
-version = "1.0.1"
+version = "1.0.2"
 description = "Moderator Allocation App - A desktop application for processing evaluation data"
 authors = ["Your Name"]
 license = "MIT"
